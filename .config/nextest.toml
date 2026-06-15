@@ -1,0 +1,20 @@
+# cargo-nextest configuration.
+#
+# The full commit gate is TWO commands — nextest does not build or run doctests:
+#
+#     cargo nextest run --workspace
+#     cargo test --workspace --doc
+#
+# nextest gives process-per-test parallelism across all cores (the in-repo suite is
+# pure: no shared env/cwd/files/global mutable state, so process isolation is safe).
+
+[profile.default]
+# These are deterministic numeric checks — a failure is a real regression, never
+# flakiness — so retries would only mask bugs. Keep them off.
+retries = 0
+
+[profile.ci]
+# CI: report everything, don't stop at the first failure.
+retries = 0
+fail-fast = false
+failure-output = "immediate-final"

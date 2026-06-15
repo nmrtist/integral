@@ -1,0 +1,20 @@
+[package]
+name = "integral-codegen"
+description = "Build-time generation of specialized kernels and coefficient tables for the integral crate (pure Rust)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+# Build-time tooling for this workspace only; not published to crates.io.
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

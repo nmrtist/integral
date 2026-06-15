@@ -1,0 +1,28 @@
+[package]
+name = "integral"
+description = "Native-Rust Gaussian integrals for quantum mechanics (driver + public API)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+# Optional dependencies for the `periodic` feature.
+rustfft = { version = "6", optional = true }
+latx = { version = "0.1.0", optional = true }
+rayon = { version = "1", optional = true }
+
+[dev-dependencies]
+
+[features]
+# Periodic GPW support.
+periodic = ["dep:rustfft", "dep:latx", "dep:rayon"]
+
+[lints]
+workspace = true

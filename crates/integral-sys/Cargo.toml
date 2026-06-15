@@ -1,0 +1,25 @@
+[package]
+name = "integral-sys"
+description = "C ABI (extern \"C\") for the integral crate, with a documented buffer layout/strides for interop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+# Consumed as a compiled C artifact (cdylib/staticlib), not via crates.io.
+publish = false
+
+# Exposed as both a Rust rlib (for testing the ABI) and C-linkable libraries.
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+integral = { workspace = true }
+
+[lints]
+workspace = true

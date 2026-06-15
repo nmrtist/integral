@@ -1,0 +1,27 @@
+[package]
+name = "integral-benches"
+description = "Criterion benchmarks and the eri_profile performance harness for the integral crate."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+integral = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "one_electron"
+harness = false
+
+[[bench]]
+name = "two_electron"
+harness = false
+
+[lints]
+workspace = true
