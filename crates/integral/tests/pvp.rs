@@ -84,10 +84,12 @@ fn s_s_on_nucleus_matches_closed_form() {
 /// over an explicit four-shell derivative basis (raised/lowered shells with
 /// norm-compensated coefficients), and compare to `pvp_charges` element-wise —
 /// a structurally different evaluation (driver-level matrix assembly vs the
-/// primitive-level block combination), through angular momenta up to g×g
-/// (internal shifted integrals to l = 5).
+/// primitive-level block combination), through angular momenta up to h×h
+/// (`l = 5`, the documented maximum — internal shifted integrals reach l = 6).
+/// The h cases close the gap between the kernel's claimed `l ≤ 5` reach and the
+/// previous l ≤ 4 cross-check (heavy-element QZ basis sets carry h functions).
 #[test]
-fn matches_derivative_basis_assembly_up_to_g() {
+fn matches_derivative_basis_assembly_up_to_h() {
     let a_c = [0.1, -0.3, 0.2];
     let b_c = [-0.4, 0.5, 0.7];
     let charges: [([f64; 3], f64); 2] = [([0.3, 0.2, -0.1], 3.0), ([-0.2, -0.5, 0.6], 1.0)];
@@ -101,6 +103,8 @@ fn matches_derivative_basis_assembly_up_to_g() {
         (3, 2, 1.1, 0.8),
         (4, 3, 0.9, 0.7),
         (4, 4, 0.8, 0.6),
+        (5, 4, 0.7, 0.9), // h × g
+        (5, 5, 0.6, 0.8), // h × h (the documented maximum)
     ] {
         let bra = Shell::new(la, a_c, vec![alpha], vec![1.0]).unwrap();
         let ket = Shell::new(lb, b_c, vec![beta], vec![1.0]).unwrap();

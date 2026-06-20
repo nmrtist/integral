@@ -247,6 +247,41 @@ fn cross_engine_eri_gradient_high_l_distinct_centres() {
     assert!(worst < 1e-10, "cross-engine ERI grad worst {worst:.3e}");
 }
 
+/// 4-center ERI gradient differentiating an **h (l=5)** shell — the heavy-element
+/// (hh|··)-class force the engines are positioned for. The center derivative
+/// raises the h shell to i (l=6) = MAX_L, exercising the raise-to-l=6 path under
+/// the 4c gradient. Previously the 4c ERI gradient was tested only to l=4, while
+/// the 3c/2c gradients already reach l=5 (df_gradients.rs) — this closes that
+/// single hole. Both engines, Cartesian + spherical, FD-validated against
+/// `eri_with`, plus element-by-element cross-engine agreement. `#[ignore]`d
+/// because the full nao⁴ FD with an h shell is slow in debug; run in release via
+/// `--include-ignored`.
+#[test]
+#[ignore = "expensive: full 4c ERI-gradient FD with an h (l=5) shell; run in release"]
+fn fd_eri_gradient_l5_both_engines() {
+    let mut worst = 0.0_f64;
+    for sph in [false, true] {
+        let basis = eri_sweep_basis(5, sph);
+        let r = eri_grad_fd_worst(&basis, Engine::Rys);
+        let o = eri_grad_fd_worst(&basis, Engine::OsHgp);
+        let rg = basis.eri_grad_with(Engine::Rys).unwrap();
+        let og = basis.eri_grad_with(Engine::OsHgp).unwrap();
+        let mut cross = 0.0_f64;
+        for ai in 0..basis.atoms().len() {
+            for axis in 0..3 {
+                cross = cross.max(max_abs_diff(rg.block(ai, axis), og.block(ai, axis)));
+            }
+        }
+        eprintln!("l=5 ERI grad (sph={sph}): Rys FD={r:.2e} OS/HGP FD={o:.2e} cross={cross:.2e}");
+        assert!(
+            cross < 1e-9,
+            "l=5 cross-engine ERI grad {cross:.3e} (sph={sph})"
+        );
+        worst = worst.max(r).max(o);
+    }
+    assert!(worst < 1e-5, "l=5 ERI grad FD worst {worst:.3e}");
+}
+
 /// Regenerated step study: confirm O(h²) convergence down to the cancellation
 /// floor, independent of the `fd_step_study` in `gradients.rs`.
 #[test]

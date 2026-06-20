@@ -185,6 +185,35 @@ fn f_and_g_shells_match_finite_differences() {
     assert_sum_rule(&grad, 1e-12, "f×g");
 }
 
+/// h (l=5) shell off the ECP center with a d-projector channel — the
+/// heavy-element QZ case (5th–6th-row QZ basis sets carry h polarization). The
+/// center derivative raises the h shell to i (l=6) = MAX_L, exercising the
+/// gradient-cap raise from g to h. FD agreement ≤ 1e-7 (the slightly looser floor
+/// reflects the larger third derivative of an h shell at the 1e-5 step).
+#[test]
+fn h_shell_off_center_matches_finite_differences() {
+    let atoms = [[0.1, -0.2, 0.3], [0.5, 0.0, 1.0]];
+    let build = |a: &[[f64; 3]]| {
+        Basis::new(vec![
+            Shell::new(2, a[0], vec![1.3], vec![1.0]).unwrap(), // d on the ECP atom
+            Shell::new(5, a[1], vec![1.1], vec![1.0]).unwrap(), // h off-center
+        ])
+    };
+    let ecps = [Ecp {
+        atom: 0,
+        n_core: 0,
+        max_l: 3,
+        local: vec![epr(2, 1.2, -1.5)],
+        semilocal: vec![Vec::new(), Vec::new(), vec![epr(2, 0.9, 0.8)]],
+    }];
+    let basis = build(&atoms);
+    let gamma = symmetric_gamma(basis.nao());
+    let grad = basis.ecp_grad_contract(&ecps, &gamma).unwrap();
+    let fd = fd_grad(&|a| build(a), &atoms, &ecps, &gamma, 1e-5);
+    assert_close(&grad, &fd, 1e-7, "h off-center");
+    assert_sum_rule(&grad, 1e-11, "h off-center");
+}
+
 /// Spherical shells go through the same `c2s` transform as the values: FD
 /// agreement ≤ 1e-8 on a spherical-d / Cartesian-s mix, ECP on a third atom.
 #[test]
@@ -393,10 +422,12 @@ fn error_paths() {
             got: 2
         })
     );
-    let high = Basis::new(vec![Shell::new(5, [0.0; 3], vec![1.0], vec![1.0]).unwrap()]);
+    // i (l=6) is above the gradient cap (the derivative would raise it to l=7,
+    // outside MAX_L); h (l=5) is now supported (see `h_shell_off_center_*`).
+    let high = Basis::new(vec![Shell::new(6, [0.0; 3], vec![1.0], vec![1.0]).unwrap()]);
     let gamma = vec![0.0; high.nao() * high.nao()];
     assert_eq!(
         high.ecp_grad_contract(&ecps, &gamma),
-        Err(IntegralError::AngularMomentumTooHighForGradient { l: 5, max: 4 })
+        Err(IntegralError::AngularMomentumTooHighForGradient { l: 6, max: 5 })
     );
 }

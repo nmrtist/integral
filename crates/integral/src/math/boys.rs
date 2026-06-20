@@ -647,4 +647,38 @@ mod tests {
             }
         }
     }
+
+    /// Tight-core (very large `T`) regime: heavy elements have tight core
+    /// exponents (α ~ 1e6–1e8) that drive `T = ρ|P−C|²` to ~1e6–1e8, where
+    /// `e^{−T}` underflows to exactly 0 and the ladder is the exact asymptotic
+    /// closed form `F_m(T) = (2m−1)!!/2^{m+1} · √π · T^{−(m+1/2)}`. This locks in
+    /// that the full ladder (top order by the asymptotic form, lower orders by the
+    /// downward recurrence with `e^{−T}=0`) stays accurate up to `m = 24 = 4·MAX_L`
+    /// — the regime no other Boys test reaches (the table/quadrature tests stop at
+    /// `T ≈ 100`). The double-factorial closed form is an independent reference.
+    #[test]
+    fn large_t_matches_asymptotic_closed_form() {
+        // (2m−1)!! with (−1)!! = 1.
+        let odd_df = |m: usize| -> f64 {
+            let mut p = 1.0;
+            let mut i = 2 * m as i64 - 1;
+            while i > 1 {
+                p *= i as f64;
+                i -= 2;
+            }
+            p
+        };
+        let sqrt_pi = std::f64::consts::PI.sqrt();
+        for &t in &[1e3_f64, 1e4, 1e6, 1e8] {
+            assert_eq!((-t).exp(), 0.0, "expected e^-T underflow at T={t}");
+            let mut out = [0.0; 25];
+            boys_array(24, t, &mut out);
+            for (m, &got) in out.iter().enumerate() {
+                let expect =
+                    odd_df(m) / 2f64.powi(m as i32 + 1) * sqrt_pi * t.powf(-(m as f64 + 0.5));
+                let rel = (got - expect).abs() / expect.abs().max(1e-300);
+                assert!(rel < 1e-12, "F_{m}({t}) = {got} vs {expect} (rel {rel:e})");
+            }
+        }
+    }
 }

@@ -111,4 +111,36 @@ mod tests {
             }
         }
     }
+
+    /// Tight-core regime: heavy-element basis sets carry very tight core
+    /// primitives (α ~ 1e5–1e8). `cart_norm` must stay finite and the normalized
+    /// primitive must keep unit self-overlap there — the `(4α)^l` intermediate
+    /// (≈4e57 at α=1e9, l=6) and `N` (≈2.5e33) are both well within f64 range, and
+    /// the `.powi(l).sqrt()` ordering avoids squaring a large norm. Regression
+    /// guard against a future ordering change that would overflow or lose
+    /// precision at the tight core.
+    #[test]
+    fn tight_core_normalization_is_stable() {
+        let raw_self_overlap = |alpha: f64, lx: usize, ly: usize, lz: usize| {
+            let l = (lx + ly + lz) as i32;
+            let df = double_factorial(2 * lx as i64 - 1)
+                * double_factorial(2 * ly as i64 - 1)
+                * double_factorial(2 * lz as i64 - 1);
+            df / (4.0 * alpha).powi(l) * (std::f64::consts::PI / (2.0 * alpha)).powf(1.5)
+        };
+        for &alpha in &[1e3, 1e5, 1e7, 1e8, 1e9] {
+            for &(lx, ly, lz) in &[(0, 0, 0), (5, 0, 0), (6, 0, 0), (2, 2, 2), (3, 2, 1)] {
+                let n = cart_norm(alpha, lx, ly, lz);
+                assert!(
+                    n.is_finite() && n > 0.0,
+                    "N non-finite at α={alpha} l=({lx}{ly}{lz}): {n}"
+                );
+                let s = n * n * raw_self_overlap(alpha, lx, ly, lz);
+                assert!(
+                    (s - 1.0).abs() < 1e-12,
+                    "α={alpha} l=({lx}{ly}{lz}) self-overlap={s}"
+                );
+            }
+        }
+    }
 }

@@ -245,6 +245,116 @@ fn ag_def2_ecp(atom: usize) -> Ecp {
     }
 }
 
+/// Published def2-ECP for iodine (I, ECP28MDF): 28-electron core, local L = f,
+/// s/p/d projectors. The s/p/d blocks are the `U_l − U_f` differences in the
+/// gaussian94 tabulation (each ends with the negated local terms), matching the
+/// crate's `semilocal[l]` convention. Source: Basis Set Exchange `def2-ecp`.
+fn i_def2_ecp(atom: usize) -> Ecp {
+    Ecp {
+        atom,
+        n_core: 28,
+        max_l: 3,
+        local: vec![
+            epr(2, 19.458_609_00, -21.842_040_00),
+            epr(2, 19.349_260_00, -28.468_191_00),
+            epr(2, 4.823_767_00, -0.243_713_00),
+            epr(2, 4.884_315_00, -0.320_804_00),
+        ],
+        semilocal: vec![
+            vec![
+                epr(2, 40.015_835_00, 49.994_293_00),
+                epr(2, 17.429_747_00, 281.025_317_00),
+                epr(2, 9.005_484_00, 61.573_326_00),
+                epr(2, 19.458_609_00, 21.842_040_00),
+                epr(2, 19.349_260_00, 28.468_191_00),
+                epr(2, 4.823_767_00, 0.243_713_00),
+                epr(2, 4.884_315_00, 0.320_804_00),
+            ],
+            vec![
+                epr(2, 15.355_466_00, 67.442_841_00),
+                epr(2, 14.971_833_00, 134.881_137_00),
+                epr(2, 8.960_164_00, 14.675_051_00),
+                epr(2, 8.259_096_00, 29.375_666_00),
+                epr(2, 19.458_609_00, 21.842_040_00),
+                epr(2, 19.349_260_00, 28.468_191_00),
+                epr(2, 4.823_767_00, 0.243_713_00),
+                epr(2, 4.884_315_00, 0.320_804_00),
+            ],
+            vec![
+                epr(2, 15.068_908_00, 35.439_529_00),
+                epr(2, 14.555_322_00, 53.176_057_00),
+                epr(2, 6.718_647_00, 9.067_195_00),
+                epr(2, 6.456_393_00, 13.206_937_00),
+                epr(2, 1.191_779_00, 0.089_335_00),
+                epr(2, 1.291_157_00, 0.052_380_00),
+                epr(2, 19.458_609_00, 21.842_040_00),
+                epr(2, 19.349_260_00, 28.468_191_00),
+                epr(2, 4.823_767_00, 0.243_713_00),
+                epr(2, 4.884_315_00, 0.320_804_00),
+            ],
+        ],
+    }
+}
+
+/// Published def2-ECP for lead (Pb, ECP60MDF): 60-electron core, local L = f,
+/// s/p/d projectors (the 6th-row main-group case). Source: BSE `def2-ecp`.
+fn pb_def2_ecp(atom: usize) -> Ecp {
+    Ecp {
+        atom,
+        n_core: 60,
+        max_l: 3,
+        local: vec![
+            epr(2, 3.887_512_00, 12.209_892_00),
+            epr(2, 3.811_963_00, 16.190_291_00),
+        ],
+        semilocal: vec![
+            vec![
+                epr(2, 12.296_303_00, 281.285_499_00),
+                epr(2, 8.632_634_00, 62.520_217_00),
+                epr(2, 3.887_512_00, -12.209_892_00),
+                epr(2, 3.811_963_00, -16.190_291_00),
+            ],
+            vec![
+                epr(2, 10.241_790_00, 72.276_897_00),
+                epr(2, 8.924_176_00, 144.591_083_00),
+                epr(2, 6.581_342_00, 4.758_693_00),
+                epr(2, 6.255_403_00, 9.940_621_00),
+                epr(2, 3.887_512_00, -12.209_892_00),
+                epr(2, 3.811_963_00, -16.190_291_00),
+            ],
+            vec![
+                epr(2, 7.754_336_00, 35.848_507_00),
+                epr(2, 7.720_281_00, 53.724_342_00),
+                epr(2, 4.970_264_00, 10.115_256_00),
+                epr(2, 4.563_789_00, 14.833_731_00),
+                epr(2, 3.887_512_00, -12.209_892_00),
+                epr(2, 3.811_963_00, -16.190_291_00),
+            ],
+        ],
+    }
+}
+
+/// Published def2-ECP for ytterbium (Yb, ECP28MWB, 4f-in-valence lanthanide):
+/// 28-electron core, local L = h (a zero reference potential), and projectors
+/// s/p/d/f/**g** — the highest projector momentum and largest local L in the
+/// def2 range, exercising the type-2 angular path at λ up to `l_proj + l_basis`.
+/// Source: BSE `def2-ecp`.
+fn yb_def2_ecp(atom: usize) -> Ecp {
+    Ecp {
+        atom,
+        n_core: 28,
+        max_l: 5,
+        local: vec![epr(2, 1.000_000_00, 0.000_000_00)],
+        semilocal: vec![
+            vec![epr(2, 32.424_484_00, 891.013_777_00)],
+            vec![epr(2, 18.656_232_00, 264.036_953_00)],
+            vec![epr(2, 10.490_222_00, 73.923_919_00)],
+            vec![epr(2, 20.774_183_00, -39.592_173_00)],
+            vec![epr(2, 28.431_028_00, -34.638_638_00)],
+        ],
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -341,6 +451,87 @@ fn g_shells_on_and_off_center_match_quadrature_reference() {
     let want = ref_ecp(&basis, std::slice::from_ref(&ecp), 40, 80);
     let diff = max_abs_diff(&got, &want);
     assert!(diff <= 1e-8, "max |analytic − reference| = {diff:e}");
+}
+
+/// h (l=5) and i (l=6) basis functions on and off the ECP center, validated
+/// against the brute-force quadrature reference. Heavy-element QZ basis sets
+/// carry h (and the engine supports i); the type-1 local channel drives the
+/// angular order to `2·l = 12`, exercising the high-λ real-spherical-harmonic
+/// normalization — the regime where the previous `factorial(l+m)` form lost
+/// ~1e-7 of precision (see the `rsh_poly` normalization fix). Projector ≤ g
+/// (l=4, the def2 maximum), so the reference's closed-form l≤4 harmonics suffice.
+/// Closes the gap where no basis above g (l=4) was ever validated.
+#[test]
+fn h_and_i_basis_match_quadrature_reference() {
+    for l in [5usize, 6] {
+        let c = [0.15, -0.2, 0.3];
+        let basis = Basis::new(vec![
+            Shell::new(l, c, vec![1.1], vec![1.0]).unwrap(), // on the ECP center
+            Shell::new(l, [0.5, 0.1, 1.0], vec![0.9], vec![1.0]).unwrap(), // off-center
+        ]);
+        // L=5 (h) local channel drives type-1 λ up to 2l; a g (l=4) projector
+        // exercises type-2 λ up to l_proj + l_basis.
+        let ecp = Ecp {
+            atom: 0,
+            n_core: 0,
+            max_l: 5,
+            local: vec![epr(2, 1.3, -1.8)],
+            semilocal: vec![
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                vec![epr(2, 0.9, 0.7)],
+            ],
+        };
+        let got = basis.ecp(std::slice::from_ref(&ecp));
+        assert_no_nan(&got);
+        // Angular GL is exact for these polynomial integrands well below (40, 80);
+        // accuracy is radial-grid-limited (~1e-13), so a tight guard is safe and
+        // catches the ~1e-7 high-λ normalization regression by orders of magnitude.
+        let want = ref_ecp(&basis, std::slice::from_ref(&ecp), 40, 80);
+        let diff = max_abs_diff(&got, &want);
+        eprintln!("l={l} h/i-basis ECP vs quadrature: max diff = {diff:e}");
+        assert!(diff <= 1e-9, "l={l}: max |analytic − reference| = {diff:e}");
+    }
+}
+
+/// Real published def2-ECPs spanning the Rb–Rn range — I (ECP28, 5th-row
+/// p-block), Yb (ECP28, lanthanide: local L=5/h with a g projector), Pb (ECP60,
+/// 6th-row p-block) — validated against the brute-force quadrature reference for
+/// the ACTUAL heavy-element potentials (deep/tight exponents, real channel
+/// structures), not just synthetic ones. Together with the Ag (ECP28) fixtures
+/// this covers 5th-row, 6th-row, and lanthanide ECPs.
+#[test]
+fn def2_ecp_range_matches_quadrature_reference() {
+    let center = [0.2, -0.1, 0.3];
+    let off = [0.4, 0.5, 1.4];
+    let make_basis = || {
+        Basis::new(vec![
+            Shell::new(0, center, vec![1.5], vec![1.0]).unwrap(),
+            Shell::new(1, center, vec![1.1], vec![1.0]).unwrap(),
+            Shell::new(2, center, vec![0.9], vec![1.0]).unwrap(),
+            Shell::new(3, center, vec![1.2], vec![1.0]).unwrap(), // f on the ECP atom
+            Shell::new(0, off, vec![0.8], vec![1.0]).unwrap(),
+            Shell::new(1, off, vec![0.6], vec![1.0]).unwrap(),
+        ])
+    };
+    for (name, ecp) in [
+        ("I", i_def2_ecp(0)),
+        ("Yb", yb_def2_ecp(0)),
+        ("Pb", pb_def2_ecp(0)),
+    ] {
+        let basis = make_basis();
+        let got = basis.ecp(std::slice::from_ref(&ecp));
+        assert_no_nan(&got);
+        let want = ref_ecp(&basis, std::slice::from_ref(&ecp), 40, 80);
+        let diff = max_abs_diff(&got, &want);
+        eprintln!("{name} def2-ECP vs quadrature: max diff = {diff:e}");
+        assert!(
+            diff <= 1e-7,
+            "{name}: max |analytic − reference| = {diff:e}"
+        );
+    }
 }
 
 /// The ECP matrix is exactly symmetric (bitwise, by construction), including

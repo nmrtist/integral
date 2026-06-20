@@ -57,12 +57,15 @@ use crate::shell::{Basis, Shell};
 use crate::IntegralError;
 
 /// Maximum AO angular momentum supported by [`Basis::ecp_grad_contract`]
-/// (`l ≤ 4`, s…g — the range validated by the principle-based gradient tests;
-/// the derivative raises the differentiated shell to `l + 1`).
-pub const MAX_ECP_GRAD_L: usize = 4;
+/// (`l ≤ 5`, s…h — heavy-element QZ basis sets carry h functions on the ECP
+/// atom; the derivative raises the differentiated shell to `l + 1 = 6 = MAX_L`,
+/// which stays inside the engines' validated range). Validated by the
+/// finite-difference gradient tests through h.
+pub const MAX_ECP_GRAD_L: usize = 5;
 
-/// Maximum number of projector channels (`l = 0..=4`) supported by
-/// [`Basis::ecp_grad_contract`].
+/// Maximum number of projector channels (`l = 0..=4`, s…g) supported by
+/// [`Basis::ecp_grad_contract`] — the def2-ECP maximum across the Rb–Rn range
+/// (the heaviest small-core ECPs carry projectors up to g).
 const MAX_ECP_GRAD_PROJ: usize = 5;
 
 /// Skip a primitive contribution when its peak exponent bound is below this
@@ -235,8 +238,9 @@ impl Basis {
             );
             assert!(
                 e.semilocal.len() <= MAX_ECP_GRAD_PROJ,
-                "ecp_grad_contract supports projector channels l <= 4, \
-                 got {} channels",
+                "ecp_grad_contract supports up to {} projector channels \
+                 (l = 0..=4, s…g), got {}",
+                MAX_ECP_GRAD_PROJ,
                 e.semilocal.len()
             );
         }
@@ -863,10 +867,6 @@ fn binom(n: usize, k: usize) -> f64 {
     acc
 }
 
-fn factorial(n: usize) -> f64 {
-    (1..=n).map(|i| i as f64).product()
-}
-
 /// Scaled modified spherical Bessel functions `out[λ] = e^{−x} i_λ(x)` for
 /// `λ = 0..=lmax`, `x ≥ 0`. All-positive power series (no cancellation) below
 /// `x = 100`; upward recurrence from the closed forms `λ = 0, 1` above (stable
@@ -998,7 +998,15 @@ fn rsh_poly(l: usize, m: i32, pl: &[f64]) -> Poly {
         }
         return out;
     }
-    let nrm = ((2 * l + 1) as f64 / (2.0 * PI) * factorial(l - ma) / factorial(l + ma)).sqrt();
+    // (l−ma)!/(l+ma)! = 1 / ∏_{k=l−ma+1}^{l+ma} k, formed as a running product so it
+    // stays accurate at high l. Forming factorial(l+ma) directly loses precision
+    // once l+ma ≥ 18 (it exceeds 2^53), which corrupts the high-λ harmonics
+    // (λ ≥ 9) that enter the angular tables of h/i-basis ECP integrals.
+    let mut ratio = 1.0;
+    for k in (l - ma + 1)..=(l + ma) {
+        ratio /= k as f64;
+    }
+    let nrm = ((2 * l + 1) as f64 / (2.0 * PI) * ratio).sqrt();
     // sin^|m|θ · cos/sin(|m|φ) = Re/Im[(x̂ + iŷ)^|m|].
     let p_start = usize::from(m < 0);
     for p in (p_start..=ma).step_by(2) {
@@ -1064,18 +1072,31 @@ mod tests {
     /// monomial-integral primitive the angular factors use.
     #[test]
     fn rsh_orthonormal() {
-        let rsh = Rsh::new(8);
-        for l1 in 0..=8usize {
-            for l2 in 0..=8usize {
+        // Through λ = 12: an l=6 (i) basis function drives the type-1 angular order
+        // to 2·l = 12 and type-2 to l_proj + l_basis, so these high-λ harmonics
+        // actually enter the l=5/6 angular tables and must be orthonormal.
+        let rsh = Rsh::new(12);
+        let mut worst = 0.0f64;
+        for l1 in 0..=12usize {
+            for l2 in 0..=12usize {
                 for m1 in -(l1 as i32)..=l1 as i32 {
                     for m2 in -(l2 as i32)..=l2 as i32 {
                         let s = omega2(rsh.poly(l1, m1), rsh.poly(l2, m2), [0, 0, 0]);
                         let expect = if l1 == l2 && m1 == m2 { 1.0 } else { 0.0 };
-                        assert!((s - expect).abs() < 1e-12, "⟨{l1},{m1}|{l2},{m2}⟩ = {s}");
+                        let d = (s - expect).abs();
+                        // ~1.7e-9 is the genuine round-off floor of evaluating
+                        // ⟨S_l1|S_l2⟩ via degree-(l1+l2) monomial integration at λ
+                        // up to 12 — e.g. ⟨S_12,0|S_12,0⟩ squares P_12 into cancelling
+                        // degree-24 monomials. It is far below the 1e-8 ECP-integral
+                        // tolerance; a normalization regression (e.g. forming
+                        // factorial(l+m) directly) would blow this up to ~1e-7.
+                        assert!(d < 5e-9, "⟨{l1},{m1}|{l2},{m2}⟩ = {s}");
+                        worst = worst.max(d);
                     }
                 }
             }
         }
+        eprintln!("Rsh orthonormality worst residual (λ ≤ 12): {worst:e}");
     }
 
     /// Gauss–Legendre sanity: exact for low-order polynomials.
@@ -1169,6 +1190,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Heavy-element extreme-exponent radial-quadrature accuracy. def2 ECPs and
+    /// their matching basis sets reach very large exponents (α and k into the
+    /// thousands); the fixed 128-point Gauss–Legendre rule on a window derived
+    /// from the Gaussian width must still resolve `r^{n+s} e^{−αr²} M_λ(kr)` at
+    /// high `(n+s)`. Compares BOTH `radial_type1` AND the two-Bessel
+    /// `radial_type2` (which previously had no independent radial reference) to a
+    /// fine 400k-panel Simpson rule on a generous window, in the overflow-free
+    /// folded form. Guards against silent under-resolution at the tight core.
+    /// `#[ignore]`d (the fine-Simpson reference is slow in debug); run in release
+    /// via `--include-ignored`.
+    #[test]
+    #[ignore = "expensive heavy-exponent radial-quadrature reference; run in release"]
+    fn radial_quadrature_accurate_at_heavy_element_exponents() {
+        // Independent fine-Simpson reference for the type-1 radial integrand
+        // ∫_0^∞ r^{n+s} e^{−α r²} M_λ(k r) dr (M_λ = i_λ), overflow-free folded form.
+        let ref1 = |alpha: f64, k: f64, n: i32, lam: usize, s: usize| -> f64 {
+            let r0 = k / (2.0 * alpha);
+            let hw = (WINDOW_LOG / alpha).sqrt();
+            let hi = (r0 + 16.0 * hw).max(24.0 * hw);
+            let npan = 400_000usize;
+            let h = hi / npan as f64;
+            let mut mb = vec![0.0; lam + 1];
+            let mut f = |r: f64| {
+                msb_scaled(k * r, lam, &mut mb);
+                r.powi(n + s as i32) * ((k - alpha * r) * r).exp() * mb[lam]
+            };
+            let mut acc = f(0.0) + f(hi);
+            for i in 1..npan {
+                let w = if i % 2 == 1 { 4.0 } else { 2.0 };
+                acc += w * f(i as f64 * h);
+            }
+            acc * h / 3.0
+        };
+        // Two-Bessel type-2 reference.
+        let ref2 = |alpha: f64, ka: f64, kb: f64, n: i32, la: usize, lb: usize, s: usize| -> f64 {
+            let ksum = ka + kb;
+            let r0 = ksum / (2.0 * alpha);
+            let hw = (WINDOW_LOG / alpha).sqrt();
+            let hi = (r0 + 16.0 * hw).max(24.0 * hw);
+            let npan = 400_000usize;
+            let h = hi / npan as f64;
+            let mut mba = vec![0.0; la + 1];
+            let mut mbb = vec![0.0; lb + 1];
+            let mut f = |r: f64| {
+                msb_scaled(ka * r, la, &mut mba);
+                msb_scaled(kb * r, lb, &mut mbb);
+                r.powi(n + s as i32) * ((ksum - alpha * r) * r).exp() * mba[la] * mbb[lb]
+            };
+            let mut acc = f(0.0) + f(hi);
+            for i in 1..npan {
+                let w = if i % 2 == 1 { 4.0 } else { 2.0 };
+                acc += w * f(i as f64 * h);
+            }
+            acc * h / 3.0
+        };
+
+        let mut worst1 = 0.0f64;
+        let mut worst2 = 0.0f64;
+        // (α, k) spanning moderate to heavy-element tight-core scale.
+        for &(alpha, k) in &[
+            (50.0_f64, 20.0_f64),
+            (300.0, 120.0),
+            (1.0e3, 600.0),
+            (5.0e3, 2.0e3),
+            (1.0e4, 5.0e3),
+        ] {
+            let ltot = 10usize; // s up to la+lb = 10 (h×h)
+            let n = 2i32;
+            let mut mb = vec![0.0; ltot + 1];
+            let q = radial_type1(alpha, k, 0.0, n, ltot, &mut mb);
+            for lam in 0..=ltot {
+                for s in 0..=ltot {
+                    let want = ref1(alpha, k, n, lam, s);
+                    if want.abs() > 1e-30 {
+                        let got = q[lam * (ltot + 1) + s];
+                        worst1 = worst1.max((got - want).abs() / want.abs());
+                    }
+                }
+            }
+            let (ka, kb) = (k, 0.6 * k);
+            let (lama, lamb) = (8usize, 6usize);
+            let smax = 10usize;
+            let mut mba = vec![0.0; lama + 1];
+            let mut mbb = vec![0.0; lamb + 1];
+            let q2 = radial_type2(alpha, ka, kb, 0.0, n, smax, lama, lamb, &mut mba, &mut mbb);
+            for laa in 0..=lama {
+                for lbb in 0..=lamb {
+                    for s in 0..=smax {
+                        let want = ref2(alpha, ka, kb, n, laa, lbb, s);
+                        if want.abs() > 1e-30 {
+                            let got = q2[(laa * (lamb + 1) + lbb) * (smax + 1) + s];
+                            worst2 = worst2.max((got - want).abs() / want.abs());
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("heavy-exponent radial: worst type-1 rel={worst1:e}, type-2 rel={worst2:e}");
+        assert!(
+            worst1 < 1e-7,
+            "type-1 radial under-resolved at heavy exponents: {worst1:e}"
+        );
+        assert!(
+            worst2 < 1e-7,
+            "type-2 radial under-resolved at heavy exponents: {worst2:e}"
+        );
     }
 
     /// Unit-sphere monomial integrals: a few closed-form values.

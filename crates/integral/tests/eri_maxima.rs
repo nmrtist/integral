@@ -131,23 +131,73 @@ fn e_coeff(i: i64, j: i64, t: i64, q: f64, a: f64, b: f64) -> f64 {
     }
 }
 
-fn hermite_r(t: i64, u: i64, v: i64, n: usize, fm: &[f64], two_rho: f64, pq: [f64; 3]) -> f64 {
-    if t < 0 || u < 0 || v < 0 {
-        return 0.0;
+/// Hermite Coulomb integrals `R^0_{tuv}` for all `t+u+v ≤ lmax`, returned as a
+/// flat table `[(t·D + u)·D + v]`, `D = lmax+1`. Built iteratively from the same
+/// MD auxiliary recursion as the (validated) recursive form, but tabulated so the
+/// cost is `O(lmax⁴)` instead of exponential — which makes the (gg|gg)/(hh|hh)
+/// corners feasible. `R^n_{000} = (−2ρ)^n F_n`; for `t>0`,
+/// `R^n_{t,u,v} = (t−1)·R^{n+1}_{t−2,u,v} + X_PQ·R^{n+1}_{t−1,u,v}` (then `u`, then
+/// `v`) — the exact relation the recursive version uses.
+fn hermite_r_table(lmax: usize, fm: &[f64], two_rho: f64, pq: [f64; 3]) -> Vec<f64> {
+    let d = lmax + 1;
+    let mut layers: Vec<Vec<f64>> = (0..=lmax)
+        .map(|n| {
+            let mut l = vec![0.0f64; d * d * d];
+            l[0] = (-two_rho).powi(n as i32) * fm[n]; // R^n_{000}
+            l
+        })
+        .collect();
+    for s in 1..=lmax {
+        for n in 0..=(lmax - s) {
+            for t in 0..=s {
+                for u in 0..=(s - t) {
+                    let v = s - t - u;
+                    let next = &layers[n + 1];
+                    let val = if t > 0 {
+                        pq[0] * next[((t - 1) * d + u) * d + v]
+                            + if t >= 2 {
+                                (t as f64 - 1.0) * next[((t - 2) * d + u) * d + v]
+                            } else {
+                                0.0
+                            }
+                    } else if u > 0 {
+                        pq[1] * next[(u - 1) * d + v]
+                            + if u >= 2 {
+                                (u as f64 - 1.0) * next[(u - 2) * d + v]
+                            } else {
+                                0.0
+                            }
+                    } else {
+                        pq[2] * next[v - 1]
+                            + if v >= 2 {
+                                (v as f64 - 1.0) * next[v - 2]
+                            } else {
+                                0.0
+                            }
+                    };
+                    layers[n][(t * d + u) * d + v] = val;
+                }
+            }
+        }
     }
-    if t == 0 && u == 0 && v == 0 {
-        return (-two_rho).powi(n as i32) * fm[n];
+    layers.swap_remove(0)
+}
+
+/// MD Hermite-expansion coefficients `E^t_{ij}` for one axis, tabulated as a flat
+/// `[(i·(jmax+1) + j)·(imax+jmax+1) + t]` array — removes the exponential cost of
+/// re-recursing `e_coeff` for every output component.
+fn e_table(imax: usize, jmax: usize, q: f64, a: f64, b: f64) -> Vec<f64> {
+    let tdim = imax + jmax + 1;
+    let mut tbl = vec![0.0; (imax + 1) * (jmax + 1) * tdim];
+    for i in 0..=imax {
+        for j in 0..=jmax {
+            for t in 0..=(i + j) {
+                tbl[(i * (jmax + 1) + j) * tdim + t] =
+                    e_coeff(i as i64, j as i64, t as i64, q, a, b);
+            }
+        }
     }
-    if t > 0 {
-        (t as f64 - 1.0) * hermite_r(t - 2, u, v, n + 1, fm, two_rho, pq)
-            + pq[0] * hermite_r(t - 1, u, v, n + 1, fm, two_rho, pq)
-    } else if u > 0 {
-        (u as f64 - 1.0) * hermite_r(t, u - 2, v, n + 1, fm, two_rho, pq)
-            + pq[1] * hermite_r(t, u - 1, v, n + 1, fm, two_rho, pq)
-    } else {
-        (v as f64 - 1.0) * hermite_r(t, u, v - 2, n + 1, fm, two_rho, pq)
-            + pq[2] * hermite_r(t, u, v - 1, n + 1, fm, two_rho, pq)
-    }
+    tbl
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -193,6 +243,20 @@ fn md_primitive(
     );
     let ab = [ca[0] - cb[0], ca[1] - cb[1], ca[2] - cb[2]];
     let cdv = [cc[0] - cd[0], cc[1] - cd[1], cc[2] - cd[2]];
+    // Tabulate the Hermite-R tensor and the per-axis E-coefficients once.
+    let dd = lmax + 1;
+    let rtab = hermite_r_table(lmax, &fm, two_rho, pq);
+    let tb = la + lb + 1; // bra t-dimension
+    let tk = lc + ld + 1; // ket s-dimension
+    let ebx = e_table(la, lb, ab[0], ea, eb);
+    let eby = e_table(la, lb, ab[1], ea, eb);
+    let ebz = e_table(la, lb, ab[2], ea, eb);
+    let ekx = e_table(lc, ld, cdv[0], ec, ed);
+    let eky = e_table(lc, ld, cdv[1], ec, ed);
+    let ekz = e_table(lc, ld, cdv[2], ec, ed);
+    let be = |tbl: &[f64], i: usize, j: usize, t: usize| tbl[(i * (lb + 1) + j) * tb + t];
+    let ke = |tbl: &[f64], i: usize, j: usize, s: usize| tbl[(i * (ld + 1) + j) * tk + s];
+
     let mut out = vec![0.0; na * nb * nc * nd];
     for (ia, va) in cca.iter().enumerate() {
         for (ib, vb) in ccb.iter().enumerate() {
@@ -200,58 +264,41 @@ fn md_primitive(
                 for (id, vd) in ccd.iter().enumerate() {
                     let mut sum = 0.0;
                     for tx in 0..=(va[0] + vb[0]) {
-                        let ex = e_coeff(va[0] as i64, vb[0] as i64, tx as i64, ab[0], ea, eb);
+                        let ex = be(&ebx, va[0], vb[0], tx);
+                        if ex == 0.0 {
+                            continue;
+                        }
                         for ty in 0..=(va[1] + vb[1]) {
-                            let ey = e_coeff(va[1] as i64, vb[1] as i64, ty as i64, ab[1], ea, eb);
+                            let ey = be(&eby, va[1], vb[1], ty);
+                            if ey == 0.0 {
+                                continue;
+                            }
                             for tz in 0..=(va[2] + vb[2]) {
-                                let ez =
-                                    e_coeff(va[2] as i64, vb[2] as i64, tz as i64, ab[2], ea, eb);
+                                let ez = be(&ebz, va[2], vb[2], tz);
                                 let ebra = ex * ey * ez;
                                 if ebra == 0.0 {
                                     continue;
                                 }
                                 for sx in 0..=(vc[0] + vd[0]) {
-                                    let fx = e_coeff(
-                                        vc[0] as i64,
-                                        vd[0] as i64,
-                                        sx as i64,
-                                        cdv[0],
-                                        ec,
-                                        ed,
-                                    );
+                                    let fx = ke(&ekx, vc[0], vd[0], sx);
+                                    if fx == 0.0 {
+                                        continue;
+                                    }
                                     for sy in 0..=(vc[1] + vd[1]) {
-                                        let fy = e_coeff(
-                                            vc[1] as i64,
-                                            vd[1] as i64,
-                                            sy as i64,
-                                            cdv[1],
-                                            ec,
-                                            ed,
-                                        );
+                                        let fy = ke(&eky, vc[1], vd[1], sy);
+                                        if fy == 0.0 {
+                                            continue;
+                                        }
                                         for sz in 0..=(vc[2] + vd[2]) {
-                                            let fz = e_coeff(
-                                                vc[2] as i64,
-                                                vd[2] as i64,
-                                                sz as i64,
-                                                cdv[2],
-                                                ec,
-                                                ed,
-                                            );
+                                            let fz = ke(&ekz, vc[2], vd[2], sz);
                                             let eket = fx * fy * fz;
                                             if eket == 0.0 {
                                                 continue;
                                             }
                                             let sign =
                                                 if (sx + sy + sz) % 2 == 0 { 1.0 } else { -1.0 };
-                                            let r = hermite_r(
-                                                (tx + sx) as i64,
-                                                (ty + sy) as i64,
-                                                (tz + sz) as i64,
-                                                0,
-                                                &fm,
-                                                two_rho,
-                                                pq,
-                                            );
+                                            let r =
+                                                rtab[((tx + sx) * dd + (ty + sy)) * dd + (tz + sz)];
                                             sum += ebra * eket * sign * r;
                                         }
                                     }
@@ -267,8 +314,10 @@ fn md_primitive(
     out
 }
 
-#[test]
-fn os_matches_independent_md_g_quartets() {
+/// Forced-OS block of a single-primitive quartet `ls` (on the four fixed
+/// `quartet` centers) vs the independent MD primitive engine: `(worst_abs,
+/// worst_rel_signif, peak)`.
+fn md_vs_os_metrics(ls: [usize; 4]) -> (f64, f64, f64) {
     let cs = [
         [0.0, 0.0, 0.0],
         [0.5, -0.3, 0.2],
@@ -276,35 +325,31 @@ fn os_matches_independent_md_g_quartets() {
         [0.2, 0.4, 0.8],
     ];
     let es = [0.9, 1.3, 0.7, 1.1];
-    let cases: &[[usize; 4]] = &[
-        [4, 0, 0, 0],
-        [4, 1, 0, 0],
-        [4, 0, 4, 0],
-        [4, 1, 2, 0],
-        [2, 2, 4, 0],
-        [4, 4, 0, 0],
-    ];
+    let b = quartet(ls);
+    let s = b.shells();
+    let os = b.eri_block_with(Engine::OsHgp, 0, 1, 2, 3);
+    let w: Vec<f64> = (0..4)
+        .map(|k| s[k].coefficients()[0] * cart_norm(es[k], ls[k], 0, 0))
+        .collect();
+    let md0 = md_primitive(
+        es[0], cs[0], ls[0], es[1], cs[1], ls[1], es[2], cs[2], ls[2], es[3], cs[3], ls[3],
+    );
+    let scale = w[0] * w[1] * w[2] * w[3];
+    let md: Vec<f64> = md0.iter().map(|x| x * scale).collect();
+    metrics(&os, &md)
+}
+
+fn run_md_value_cases(cases: &[[usize; 4]]) {
     let mut bad = Vec::new();
     for &ls in cases {
-        let b = quartet(ls);
-        let s = b.shells();
-        let os = b.eri_block_with(Engine::OsHgp, 0, 1, 2, 3);
-        let w: Vec<f64> = (0..4)
-            .map(|k| s[k].coefficients()[0] * cart_norm(es[k], ls[k], 0, 0))
-            .collect();
-        let md0 = md_primitive(
-            es[0], cs[0], ls[0], es[1], cs[1], ls[1], es[2], cs[2], ls[2], es[3], cs[3], ls[3],
-        );
-        let scale = w[0] * w[1] * w[2] * w[3];
-        let md: Vec<f64> = md0.iter().map(|x| x * scale).collect();
-        let (wabs, wsig, peak) = metrics(&os, &md);
+        let (wabs, wsig, peak) = md_vs_os_metrics(ls);
         eprintln!(
-            "MD ({},{},{},{}) n={} peak={:.2e} worst_abs={:.2e} worst_rel_signif={:.2e}",
+            "MD ({},{},{},{}) lt={:2} peak={:.2e} worst_abs={:.2e} worst_rel_signif={:.2e}",
             ls[0],
             ls[1],
             ls[2],
             ls[3],
-            os.len(),
+            ls.iter().sum::<usize>(),
             peak,
             wabs,
             wsig
@@ -314,6 +359,42 @@ fn os_matches_independent_md_g_quartets() {
         }
     }
     assert!(bad.is_empty(), "OS vs MD divergence: {bad:?}");
+}
+
+#[test]
+fn os_matches_independent_md_g_quartets() {
+    // Through g (l=4) and into h (l=5) at modest total angular momentum — the
+    // cheap cases that stay fast in the default (debug) suite.
+    run_md_value_cases(&[
+        [4, 0, 0, 0],
+        [4, 1, 0, 0],
+        [4, 0, 4, 0],
+        [4, 1, 2, 0],
+        [2, 2, 4, 0],
+        [4, 4, 0, 0],
+        [5, 0, 0, 0], // h
+        [5, 1, 0, 0],
+        [5, 4, 0, 0], // (hg|ss) l_total 9
+        [5, 0, 5, 0], // (h|h)   l_total 10
+    ]);
+}
+
+/// Independent-reference validation of the *high-l corners* the engines are
+/// positioned for: (gg|gg) (l_total 16) and (hh|hh) (l_total 20). Previously
+/// these were validated only OS-vs-Rys (a shared-convention blind spot: both
+/// engines share the Boys table, prefactor, and overall convention, so an
+/// OS≡Rys agreement cannot catch a systematic error common to both). The MD
+/// Hermite-tensor path is a genuinely different algorithm. `#[ignore]`d because
+/// the recursion-based MD reference at l_total 20 is slow; run in release via
+/// `--include-ignored`.
+#[test]
+#[ignore = "expensive: independent MD reference at l_total up to 20 ((hh|hh)); run in release"]
+fn os_matches_independent_md_high_l_corners() {
+    run_md_value_cases(&[
+        [4, 4, 4, 4], // gggg l_total 16
+        [5, 5, 4, 4], // hhgg l_total 18
+        [5, 5, 5, 5], // hhhh l_total 20
+    ]);
 }
 
 #[test]
@@ -398,6 +479,73 @@ fn contracted_quartet_matches_independent_md_sum() {
     assert!(
         wsig < 1e-9 && wabs < 1e-9 * peak.max(1.0) + 1e-10,
         "abs={wabs:e} sig={wsig:e}"
+    );
+}
+
+/// Heavy-element wide-exponent / deep-contraction stress. Each shell carries a
+/// contraction spanning ~9 orders of magnitude in exponent (a tight core 1e7–1e8
+/// alongside diffuse 1e-2) — the regime where tight cores drive the Boys argument
+/// `T = ρ|P−Q|²` into 1e6–1e8 (asymptotic branch, `e^{−T}=0`) and the contraction
+/// sum mixes vastly different magnitudes. Forces BOTH engines AND an independent
+/// MD primitive sum to agree, guarding: contraction-sum precision, the
+/// `PAIR_NEGLIGIBLE` screen on tight×diffuse cross terms, and the large-T Boys
+/// path under realistic heavy-element conditions. No existing test combined wide
+/// exponents with the ERI path.
+#[test]
+fn wide_exponent_deep_contraction_matches_md_and_rys() {
+    use integral::Shell;
+    let ca = [0.0, 0.0, 0.0];
+    let cb = [0.7, -0.3, 0.2];
+    let cc = [-0.4, 0.6, -0.1];
+    let cd = [0.3, 0.2, 0.8];
+    let (la, lb, lc, ld) = (2usize, 1, 2, 0);
+    // Contractions spanning tight core → diffuse.
+    let ax = vec![1.0e7, 1.0e2, 1.0, 1.0e-2];
+    let acf = vec![0.2, 0.5, 0.6, 0.4];
+    let bx = vec![5.0e6, 3.0, 0.05];
+    let bcf = vec![0.3, 0.6, 0.5];
+    let cx = vec![1.0e8, 10.0, 0.3];
+    let ccf = vec![0.1, 0.5, 0.7];
+    let dx = vec![2.0e7, 0.7];
+    let dcf = vec![0.2, 0.8];
+    let basis = Basis::new(vec![
+        Shell::new(la, ca, ax.clone(), acf.clone()).unwrap(),
+        Shell::new(lb, cb, bx.clone(), bcf.clone()).unwrap(),
+        Shell::new(lc, cc, cx.clone(), ccf.clone()).unwrap(),
+        Shell::new(ld, cd, dx.clone(), dcf.clone()).unwrap(),
+    ]);
+    let os = basis.eri_block_with(Engine::OsHgp, 0, 1, 2, 3);
+    let rys = basis.eri_block_with(Engine::Rys, 0, 1, 2, 3);
+
+    let nrm = |e: f64, l: usize| cart_norm(e, l, 0, 0);
+    let mut md = vec![0.0; os.len()];
+    for (&ea, &wa) in ax.iter().zip(&acf) {
+        for (&eb, &wb) in bx.iter().zip(&bcf) {
+            for (&ec, &wc) in cx.iter().zip(&ccf) {
+                for (&ed, &wd) in dx.iter().zip(&dcf) {
+                    let blk = md_primitive(ea, ca, la, eb, cb, lb, ec, cc, lc, ed, cd, ld);
+                    let w = (wa * nrm(ea, la))
+                        * (wb * nrm(eb, lb))
+                        * (wc * nrm(ec, lc))
+                        * (wd * nrm(ed, ld));
+                    for (o, v) in md.iter_mut().zip(&blk) {
+                        *o += w * v;
+                    }
+                }
+            }
+        }
+    }
+    let (oa, osig, peak) = metrics(&os, &md);
+    let (ra, rsig, _) = metrics(&rys, &md);
+    eprintln!("wide-exp OS vs MD:  peak={peak:.3e} worst_abs={oa:.3e} worst_sig={osig:.3e}");
+    eprintln!("wide-exp Rys vs MD: worst_abs={ra:.3e} worst_sig={rsig:.3e}");
+    assert!(
+        osig < 1e-8 && oa < 1e-8 * peak.max(1.0) + 1e-12,
+        "OS vs MD: abs={oa:e} sig={osig:e}"
+    );
+    assert!(
+        rsig < 1e-8 && ra < 1e-8 * peak.max(1.0) + 1e-12,
+        "Rys vs MD: abs={ra:e} sig={rsig:e}"
     );
 }
 
