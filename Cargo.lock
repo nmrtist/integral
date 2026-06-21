@@ -183,7 +183,7 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "integral"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "latx",
  "rayon",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "integral-benches"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "criterion",
  "integral",
@@ -200,11 +200,11 @@ dependencies = [
 
 [[package]]
 name = "integral-codegen"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "integral-sys"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "integral",
 ]
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "integral",
 ]
