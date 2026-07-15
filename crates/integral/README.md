@@ -39,7 +39,7 @@ output conventions interoperable with common downstream tooling.
 ```toml
 # Cargo.toml
 [dependencies]
-integral = "0.3.0"
+integral = "0.4.1"
 ```
 
 ```rust
