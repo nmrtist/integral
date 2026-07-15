@@ -50,7 +50,9 @@ pub mod engine;
 pub mod math;
 
 mod df;
+mod direct;
 mod ecp;
+mod eri_batch;
 mod eri_builder;
 mod grad;
 mod grid;
@@ -64,6 +66,7 @@ mod spherical;
 use std::fmt;
 
 pub use df::{Bra3cFill, Eri3cBuilder};
+pub use direct::{DirectBuffers, DirectContractor, DirectWorkspace};
 pub use ecp::{Ecp, EcpPrimitive, MAX_ECP_GRAD_L};
 pub use eri_builder::{BraPairFill, EriBuilder};
 pub use grad::{Gradient1e, GradientEri, MAX_GRAD_L};

@@ -72,6 +72,11 @@ call site. For dense ERIs, `EriBuilder` partitions a shared output tensor into
 disjoint tasks so a caller can evaluate shell-pair work concurrently without
 unsafe code inside the library.
 
+Integral-direct SCF drivers can use `Basis::direct_contractor()` to cache shell
+metadata, primitive-pair data, Schwarz bounds, and batch dispatch once. A caller
+then owns one reusable `DirectWorkspace` per worker and caller-owned J/K buffers;
+one quartet traversal can contract multiple row-major densities.
+
 ## Validation
 
 The test suite checks:

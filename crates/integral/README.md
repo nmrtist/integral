@@ -86,6 +86,7 @@ shell via `Shell::new_spherical`; Schwarz-screened ERIs via
 | One-electron operator DSL over `r` and `p` | ✅ | dipole, quadrupole, momentum, angular momentum, kinetic, custom |
 | C ABI (`integral-sys`) | Minimal | ABI version surface only |
 | Parallel dense-ERI seam (`EriBuilder`, call-site threads) | ✅ | safe, no in-crate runtime |
+| Cached direct J/K plan (`DirectContractor`) | ✅ | caller-owned worker workspaces and matrices |
 
 **Threading.** The library is **single-threaded but thread-safe**: integral
 builders take `&self` and share no mutable state, so the recommended way to

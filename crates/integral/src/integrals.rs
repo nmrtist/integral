@@ -12,6 +12,7 @@
 
 use crate::engine::os_eri::{self, ShellRef};
 use crate::engine::{os, rys};
+use crate::eri_batch::{batch_key, evaluate_batch4, shell_ref, tri_idx, EriBatchQueue};
 
 use crate::shell::{Basis, Shell};
 use crate::spherical::{shell_transform, transform_block, transform_block4_into};
@@ -186,31 +187,11 @@ pub(crate) fn quartet_into_scratch_pairs(
 /// drain through the scalar path. Only *when* a quartet's block is computed
 /// and scattered moves; every output slot is still written exactly once with
 /// the same value, so the tensor is bit-identical to the unbatched loop.
-#[derive(Default)]
-struct EriBatchQueue {
-    /// Pending quartet shell indices per `(ne, nf, n_bra_pairs, n_ket_pairs)`.
-    buckets: std::collections::BTreeMap<(usize, usize, usize, usize), Vec<[usize; 4]>>,
-    /// Per-lane Cartesian block buffers for a flush.
-    blocks: [Vec<f64>; 4],
-    core: os_eri::EriBatch4Scratch,
-}
-
-/// One `ShellRef` per shell with its precomputed effective coefficients.
-fn shell_ref<'a>(s: &'a Shell, eff: &'a [f64]) -> ShellRef<'a> {
-    ShellRef {
-        center: s.center(),
-        l: s.l(),
-        exps: s.exponents(),
-        coeffs: eff,
-    }
-}
-
 /// Evaluate four queued quartets through the 4-lane batch kernel, then
 /// transform and scatter each lane in queue order.
 #[allow(clippy::too_many_arguments)]
 fn flush_batch4(
     queue: &mut EriBatchQueue,
-    scratch: &mut QuartetScratch,
     group: [[usize; 4]; 4],
     shells: &[Shell],
     eff: &[Vec<f64>],
@@ -220,56 +201,24 @@ fn flush_batch4(
     nao: usize,
     offs: &[usize],
 ) {
-    let quartets: [[ShellRef<'_>; 4]; 4] = group.map(|sidx| {
-        [
-            shell_ref(&shells[sidx[0]], &eff[sidx[0]]),
-            shell_ref(&shells[sidx[1]], &eff[sidx[1]]),
-            shell_ref(&shells[sidx[2]], &eff[sidx[2]]),
-            shell_ref(&shells[sidx[3]], &eff[sidx[3]]),
-        ]
-    });
-    let dims: [[usize; 4]; 4] = group.map(|sidx| [0, 1, 2, 3].map(|q| shells[sidx[q]].n_cart()));
-    for (lane, d) in dims.iter().enumerate() {
-        let n: usize = d.iter().product();
-        if queue.blocks[lane].len() < n {
-            queue.blocks[lane].resize(n, 0.0);
-        }
-        queue.blocks[lane][..n].fill(0.0);
-    }
-    {
-        let [bl0, bl1, bl2, bl3] = &mut queue.blocks;
-        let mut outs: [&mut [f64]; 4] = [
-            &mut bl0[..dims[0].iter().product()],
-            &mut bl1[..dims[1].iter().product()],
-            &mut bl2[..dims[2].iter().product()],
-            &mut bl3[..dims[3].iter().product()],
-        ];
-        os_eri::coulomb_shell_batch4_pairs_into_scratch(
-            &mut queue.core,
-            &quartets,
-            group.map(|sidx| &pair_data[tri_idx(sidx[0], sidx[1])]),
-            group.map(|sidx| &pair_data[tri_idx(sidx[2], sidx[3])]),
-            &mut outs,
-        );
-    }
-    for (lane, sidx) in group.iter().enumerate() {
-        let mats = [
-            c2s[sidx[0]].as_deref(),
-            c2s[sidx[1]].as_deref(),
-            c2s[sidx[2]].as_deref(),
-            c2s[sidx[3]].as_deref(),
-        ];
-        let len =
-            transform_block4_into(&mut queue.blocks[lane], dims[lane], &mats, &mut scratch.tmp);
-        scatter_eri_block_s8(
-            out,
-            nao,
-            *sidx,
-            offs,
-            [0, 1, 2, 3].map(|q| shells[sidx[q]].n_func()),
-            &queue.blocks[lane][..len],
-        );
-    }
+    evaluate_batch4(
+        &mut queue.scratch,
+        group,
+        shells,
+        eff,
+        pair_data,
+        c2s,
+        |sidx, block| {
+            scatter_eri_block_s8(
+                out,
+                nao,
+                sidx,
+                offs,
+                [0, 1, 2, 3].map(|q| shells[sidx[q]].n_func()),
+                block,
+            );
+        },
+    );
 }
 
 /// Screened primitive-pair data for every canonical shell pair (`i ≥ j`,
@@ -292,44 +241,6 @@ fn shell_pair_datas(shells: &[Shell], eff: &[Vec<f64>]) -> Vec<os_eri::ShellPair
         }
     }
     data
-}
-
-/// Triangular index of the canonical shell pair `(i, j)` with `i ≥ j` into
-/// [`shell_pair_datas`]' layout.
-#[inline]
-fn tri_idx(i: usize, j: usize) -> usize {
-    debug_assert!(i >= j);
-    i * (i + 1) / 2 + j
-}
-
-/// Bucket key for the batch queue, or `None` if the quartet must take the
-/// immediate scalar path: batching covers quartets that resolve to the OS/HGP
-/// engine with VRR shape `ne, nf ≤ 6` (the monomorphized 4-lane kernels —
-/// `≤ 3` via `vrr_small4`, the d/f range `4..=6` via `vrr_big4`; `(ss|ss)` takes
-/// the dedicated 4-lane fast path).
-fn batch_key(
-    engine: Engine,
-    s: [&Shell; 4],
-    pair_counts: [usize; 2],
-) -> Option<(usize, usize, usize, usize)> {
-    let resolved = match engine {
-        Engine::Auto => select_engine(
-            s[0].l() + s[1].l(),
-            s[2].l() + s[3].l(),
-            s[0].n_prim() * s[1].n_prim() * s[2].n_prim() * s[3].n_prim(),
-        ),
-        forced => forced,
-    };
-    if resolved != Engine::OsHgp {
-        return None;
-    }
-    let ne = s[0].l() + s[1].l();
-    let nf = s[2].l() + s[3].l();
-    if ne <= 6 && nf <= 6 {
-        Some((ne, nf, pair_counts[0], pair_counts[1]))
-    } else {
-        None
-    }
 }
 
 /// Evaluate every quartet still queued (the < 4-deep bucket tails) through the
@@ -795,16 +706,8 @@ impl Basis {
                                     [pending[0], pending[1], pending[2], pending[3]];
                                 pending.clear();
                                 flush_batch4(
-                                    &mut queue,
-                                    &mut scratch,
-                                    group,
-                                    shells,
-                                    &eff,
-                                    &pair_data,
-                                    &c2s,
-                                    &mut out,
-                                    nao,
-                                    &offs,
+                                    &mut queue, group, shells, &eff, &pair_data, &c2s, &mut out,
+                                    nao, &offs,
                                 );
                             }
                             continue;
@@ -1017,16 +920,8 @@ impl Basis {
                                     [pending[0], pending[1], pending[2], pending[3]];
                                 pending.clear();
                                 flush_batch4(
-                                    &mut queue,
-                                    &mut scratch,
-                                    group,
-                                    shells,
-                                    &eff,
-                                    &pair_data,
-                                    &c2s,
-                                    &mut out,
-                                    nao,
-                                    &offs,
+                                    &mut queue, group, shells, &eff, &pair_data, &c2s, &mut out,
+                                    nao, &offs,
                                 );
                             }
                             continue;

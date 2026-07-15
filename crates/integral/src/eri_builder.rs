@@ -50,7 +50,10 @@
 //! identical everywhere, by design — see [`EriBuilder::build`] for the exact
 //! tolerance contract and why.
 
+use std::collections::BTreeMap;
+
 use crate::engine::os_eri::{self, ShellPairData, ShellRef};
+use crate::eri_batch::{batch_key, evaluate_batch4, EriBatchScratch};
 use crate::integrals::{
     canonical_shell_pairs, check_erf_omega, effective_coeffs, quartet_into_scratch_erf,
     quartet_into_scratch_pairs, Engine, EriKernel, QuartetScratch, PERMS8,
@@ -116,6 +119,109 @@ pub struct EriBuilder<'b> {
     pairs: Vec<(usize, usize)>,
     /// Primitive-pair data reused by every quartet containing the shell pair.
     pair_data: Vec<ShellPairData>,
+    /// Precomputed Coulomb dispatch for every bra-pair. Each quartet is represented
+    /// by its compact ket-pair index and appears exactly once, either in a compatible
+    /// batch4 group or in the scalar/tail list. This keeps dispatch, bucketing, and
+    /// queue allocation out of the parallel fill hot path.
+    batch_schedule: EriBatchSchedule,
+}
+
+/// Compact, flat batch schedule shared by all bra-pair tasks.
+///
+/// The two offset arrays delimit one slice per canonical bra-pair. Storing a ket
+/// pair as a `u32` rather than its four shell indices keeps the schedule close to
+/// one word per quartet; shell indices and the fixed bra orientation are recovered
+/// from `EriBuilder::pairs` at evaluation time.
+#[derive(Debug)]
+struct EriBatchSchedule {
+    batch_offsets: Vec<usize>,
+    batches: Vec<[u32; 4]>,
+    scalar_offsets: Vec<usize>,
+    scalars: Vec<u32>,
+}
+
+impl EriBatchSchedule {
+    fn new(
+        shells: &[Shell],
+        engine: Engine,
+        pairs: &[(usize, usize)],
+        pair_data: &[ShellPairData],
+    ) -> Self {
+        assert!(
+            u32::try_from(pairs.len()).is_ok(),
+            "too many canonical shell pairs for dense ERI schedule"
+        );
+
+        let mut schedule = Self {
+            batch_offsets: Vec::with_capacity(pairs.len() + 1),
+            batches: Vec::new(),
+            scalar_offsets: Vec::with_capacity(pairs.len() + 1),
+            scalars: Vec::new(),
+        };
+        schedule.batch_offsets.push(0);
+        schedule.scalar_offsets.push(0);
+
+        // For a fixed bra pair, a batch key's bra angular momentum and primitive
+        // count are constants. Ket pairs can therefore be grouped once globally by
+        // the remaining two key fields and reused for every bra. This avoids even
+        // construction-time per-bra maps and temporary bucket vectors.
+        let mut ket_buckets: BTreeMap<(usize, usize), Vec<u32>> = BTreeMap::new();
+        for (ket_pair_index, &(k, l)) in pairs.iter().enumerate() {
+            ket_buckets
+                .entry((
+                    shells[k].l() + shells[l].l(),
+                    pair_data[ket_pair_index].len(),
+                ))
+                .or_default()
+                .push(ket_pair_index as u32);
+        }
+
+        // The global buckets and this fixed four-entry pending array exist only
+        // while constructing the immutable plan. Parallel fill tasks subsequently
+        // read flat slices and perform no dispatch lookup, map insertion, or queue
+        // growth.
+        for (bra_pair_index, &(i, j)) in pairs.iter().enumerate() {
+            let bra_pair_count = pair_data[bra_pair_index].len();
+            for bucket in ket_buckets.values() {
+                let mut pending = [0_u32; 4];
+                let mut pending_len = 0;
+                for &ket_pair_index in bucket {
+                    let ket = ket_pair_index as usize;
+                    let (k, l) = pairs[ket];
+                    if batch_key(
+                        engine,
+                        [&shells[i], &shells[j], &shells[k], &shells[l]],
+                        [bra_pair_count, pair_data[ket].len()],
+                    )
+                    .is_some()
+                    {
+                        pending[pending_len] = ket_pair_index;
+                        pending_len += 1;
+                        if pending_len == 4 {
+                            schedule.batches.push(pending);
+                            pending_len = 0;
+                        }
+                    } else {
+                        schedule.scalars.push(ket_pair_index);
+                    }
+                }
+                schedule.scalars.extend_from_slice(&pending[..pending_len]);
+            }
+            schedule.batch_offsets.push(schedule.batches.len());
+            schedule.scalar_offsets.push(schedule.scalars.len());
+        }
+        schedule
+    }
+
+    #[inline]
+    fn batches(&self, bra_pair_index: usize) -> &[[u32; 4]] {
+        &self.batches[self.batch_offsets[bra_pair_index]..self.batch_offsets[bra_pair_index + 1]]
+    }
+
+    #[inline]
+    fn scalars(&self, bra_pair_index: usize) -> &[u32] {
+        &self.scalars[self.scalar_offsets[bra_pair_index]..self.scalar_offsets[bra_pair_index + 1]]
+    }
 }
 
 impl<'b> EriBuilder<'b> {
@@ -137,7 +243,7 @@ impl<'b> EriBuilder<'b> {
         let eff: Vec<Vec<f64>> = shells.iter().map(effective_coeffs).collect();
         let c2s: Vec<Option<Vec<f64>>> = shells.iter().map(shell_transform).collect();
         let pairs = canonical_shell_pairs(shells.len());
-        let pair_data = pairs
+        let pair_data: Vec<ShellPairData> = pairs
             .iter()
             .map(|&(i, j)| {
                 os_eri::shell_pair_data(
@@ -156,6 +262,7 @@ impl<'b> EriBuilder<'b> {
                 )
             })
             .collect();
+        let batch_schedule = EriBatchSchedule::new(shells, engine, &pairs, &pair_data);
         EriBuilder {
             shells,
             engine,
@@ -167,6 +274,7 @@ impl<'b> EriBuilder<'b> {
             c2s,
             pairs,
             pair_data,
+            batch_schedule,
         }
     }
 
@@ -350,44 +458,82 @@ impl<'b> EriBuilder<'b> {
     /// bra-pair `(i, j)`, evaluate `(ij|kl)` over every canonical ket-pair and
     /// scatter into `sink`.
     fn run_bra_pair<S: EriSink>(&self, i: usize, j: usize, sink: &mut S) {
-        let s = self.shells;
-        let (sa, sb) = (&s[i], &s[j]);
         // One reusable block/transform buffer pair per bra-pair task (each task
         // runs on one thread), instead of fresh `Vec`s per quartet.
         let mut scratch = QuartetScratch::default();
-        let bra_pair_data = &self.pair_data[pair_index(i, j)];
-        for (ket_pair_index, &(k, l)) in self.pairs.iter().enumerate() {
-            let (sc, sd) = (&s[k], &s[l]);
-            let quartet = [sa, sb, sc, sd];
-            let eff = [&self.eff[i][..], &self.eff[j], &self.eff[k], &self.eff[l]];
-            let mats = [
-                self.c2s[i].as_deref(),
-                self.c2s[j].as_deref(),
-                self.c2s[k].as_deref(),
-                self.c2s[l].as_deref(),
-            ];
-            let len = match self.kernel {
-                EriKernel::Coulomb => quartet_into_scratch_pairs(
-                    &mut scratch,
-                    self.engine,
-                    quartet,
-                    eff,
-                    mats,
-                    bra_pair_data,
-                    &self.pair_data[ket_pair_index],
-                ),
-                EriKernel::Erf { omega } => {
-                    quartet_into_scratch_erf(&mut scratch, quartet, eff, mats, omega)
-                }
-            };
-            scatter_4fold(
-                sink,
-                [i, j, k, l],
-                &self.offs,
-                [self.nfunc[i], self.nfunc[j], self.nfunc[k], self.nfunc[l]],
-                &scratch.block[..len],
+        if self.kernel != EriKernel::Coulomb {
+            // The attenuated Rys path deliberately remains scalar and keeps its
+            // original canonical ket traversal unchanged.
+            for &(k, l) in &self.pairs {
+                self.evaluate_scalar(i, j, k, l, &mut scratch, sink);
+            }
+            return;
+        }
+
+        let bra_pair_index = pair_index(i, j);
+        let mut batch_scratch = EriBatchScratch::default();
+        for &ket_group in self.batch_schedule.batches(bra_pair_index) {
+            let group = ket_group.map(|ket_pair_index| {
+                let (k, l) = self.pairs[ket_pair_index as usize];
+                [i, j, k, l]
+            });
+            evaluate_batch4(
+                &mut batch_scratch,
+                group,
+                self.shells,
+                &self.eff,
+                &self.pair_data,
+                &self.c2s,
+                |idx, block| {
+                    scatter_4fold(sink, idx, &self.offs, idx.map(|q| self.nfunc[q]), block);
+                },
             );
         }
+        for &ket_pair_index in self.batch_schedule.scalars(bra_pair_index) {
+            let (k, l) = self.pairs[ket_pair_index as usize];
+            self.evaluate_scalar(i, j, k, l, &mut scratch, sink);
+        }
+    }
+
+    fn evaluate_scalar<S: EriSink>(
+        &self,
+        i: usize,
+        j: usize,
+        k: usize,
+        l: usize,
+        scratch: &mut QuartetScratch,
+        sink: &mut S,
+    ) {
+        let s = self.shells;
+        let quartet = [&s[i], &s[j], &s[k], &s[l]];
+        let eff = [&self.eff[i][..], &self.eff[j], &self.eff[k], &self.eff[l]];
+        let mats = [
+            self.c2s[i].as_deref(),
+            self.c2s[j].as_deref(),
+            self.c2s[k].as_deref(),
+            self.c2s[l].as_deref(),
+        ];
+        let len = match self.kernel {
+            EriKernel::Coulomb => quartet_into_scratch_pairs(
+                scratch,
+                self.engine,
+                quartet,
+                eff,
+                mats,
+                &self.pair_data[pair_index(i, j)],
+                &self.pair_data[pair_index(k, l)],
+            ),
+            EriKernel::Erf { omega } => {
+                quartet_into_scratch_erf(scratch, quartet, eff, mats, omega)
+            }
+        };
+        scatter_4fold(
+            sink,
+            [i, j, k, l],
+            &self.offs,
+            [self.nfunc[i], self.nfunc[j], self.nfunc[k], self.nfunc[l]],
+            &scratch.block[..len],
+        );
     }
 }
 
