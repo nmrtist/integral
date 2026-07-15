@@ -50,9 +50,10 @@
 //! identical everywhere, by design — see [`EriBuilder::build`] for the exact
 //! tolerance contract and why.
 
+use crate::engine::os_eri::{self, ShellPairData, ShellRef};
 use crate::integrals::{
-    canonical_shell_pairs, check_erf_omega, effective_coeffs, quartet_into_scratch,
-    quartet_into_scratch_erf, Engine, EriKernel, QuartetScratch, PERMS8,
+    canonical_shell_pairs, check_erf_omega, effective_coeffs, quartet_into_scratch_erf,
+    quartet_into_scratch_pairs, Engine, EriKernel, QuartetScratch, PERMS8,
 };
 use crate::shell::{Basis, Shell};
 use crate::spherical::shell_transform;
@@ -113,6 +114,8 @@ pub struct EriBuilder<'b> {
     c2s: Vec<Option<Vec<f64>>>,
     /// Canonical shell pairs `(i ≥ j)`, the parallel grain and the ket sweep.
     pairs: Vec<(usize, usize)>,
+    /// Primitive-pair data reused by every quartet containing the shell pair.
+    pair_data: Vec<ShellPairData>,
 }
 
 impl<'b> EriBuilder<'b> {
@@ -134,6 +137,25 @@ impl<'b> EriBuilder<'b> {
         let eff: Vec<Vec<f64>> = shells.iter().map(effective_coeffs).collect();
         let c2s: Vec<Option<Vec<f64>>> = shells.iter().map(shell_transform).collect();
         let pairs = canonical_shell_pairs(shells.len());
+        let pair_data = pairs
+            .iter()
+            .map(|&(i, j)| {
+                os_eri::shell_pair_data(
+                    ShellRef {
+                        center: shells[i].center(),
+                        l: shells[i].l(),
+                        exps: shells[i].exponents(),
+                        coeffs: &eff[i],
+                    },
+                    ShellRef {
+                        center: shells[j].center(),
+                        l: shells[j].l(),
+                        exps: shells[j].exponents(),
+                        coeffs: &eff[j],
+                    },
+                )
+            })
+            .collect();
         EriBuilder {
             shells,
             engine,
@@ -144,6 +166,7 @@ impl<'b> EriBuilder<'b> {
             eff,
             c2s,
             pairs,
+            pair_data,
         }
     }
 
@@ -332,7 +355,8 @@ impl<'b> EriBuilder<'b> {
         // One reusable block/transform buffer pair per bra-pair task (each task
         // runs on one thread), instead of fresh `Vec`s per quartet.
         let mut scratch = QuartetScratch::default();
-        for &(k, l) in &self.pairs {
+        let bra_pair_data = &self.pair_data[pair_index(i, j)];
+        for (ket_pair_index, &(k, l)) in self.pairs.iter().enumerate() {
             let (sc, sd) = (&s[k], &s[l]);
             let quartet = [sa, sb, sc, sd];
             let eff = [&self.eff[i][..], &self.eff[j], &self.eff[k], &self.eff[l]];
@@ -343,9 +367,15 @@ impl<'b> EriBuilder<'b> {
                 self.c2s[l].as_deref(),
             ];
             let len = match self.kernel {
-                EriKernel::Coulomb => {
-                    quartet_into_scratch(&mut scratch, self.engine, quartet, eff, mats)
-                }
+                EriKernel::Coulomb => quartet_into_scratch_pairs(
+                    &mut scratch,
+                    self.engine,
+                    quartet,
+                    eff,
+                    mats,
+                    bra_pair_data,
+                    &self.pair_data[ket_pair_index],
+                ),
                 EriKernel::Erf { omega } => {
                     quartet_into_scratch_erf(&mut scratch, quartet, eff, mats, omega)
                 }
@@ -359,6 +389,12 @@ impl<'b> EriBuilder<'b> {
             );
         }
     }
+}
+
+#[inline]
+fn pair_index(i: usize, j: usize) -> usize {
+    debug_assert!(i >= j);
+    i * (i + 1) / 2 + j
 }
 
 /// One unit of parallel work: the output rows owned by a single canonical bra-pair
