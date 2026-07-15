@@ -25,7 +25,7 @@ libraries or C/Fortran integral backends.
 
 ```toml
 [dependencies]
-integral = "0.4.1"
+integral = "0.4.2"
 ```
 
 ```rust
