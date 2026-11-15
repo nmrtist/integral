@@ -1,0 +1,56 @@
+name: Publish integral
+run-name: Publish integral ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-integral
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event.created
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release commit and version
+        shell: bash
+        run: |
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo 'The release tag must point to a commit on main.' >&2
+            exit 1
+          fi
+          actual_version=$(cargo metadata --locked --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "integral") | .version')
+          if [[ "$GITHUB_REF_NAME" != "v$actual_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match integral $actual_version." >&2
+            exit 1
+          fi
+      - run: cargo test --workspace --release --locked
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - run: cargo publish -p integral --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
