@@ -59,6 +59,7 @@ mod grad;
 mod grid;
 mod integrals;
 mod operator;
+mod packed_eri;
 #[cfg(feature = "periodic")]
 pub mod periodic;
 mod shell;
@@ -74,6 +75,7 @@ pub use eri_builder::{BraPairFill, EriBuilder};
 pub use grad::{Gradient1e, GradientEri, MAX_GRAD_L};
 pub use integrals::{select_engine, Engine, EriKernel, ScreeningStats};
 pub use operator::{Factor, Operator, OperatorMatrix, Term};
+pub use packed_eri::{PackedBraFill, PackedEriBuilder, PackedEriWorkspace};
 pub use shell::{Basis, Shell, ShellKind};
 
 /// Errors returned when constructing or using a [`Shell`] / [`Basis`].

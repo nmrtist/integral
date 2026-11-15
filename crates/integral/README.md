@@ -86,6 +86,7 @@ shell via `Shell::new_spherical`; Schwarz-screened ERIs via
 | One-electron operator DSL over `r` and `p` | ✅ | dipole, quadrupole, momentum, angular momentum, kinetic, custom |
 | C ABI (`integral-sys`) | Minimal | ABI version surface only |
 | Parallel dense-ERI seam (`EriBuilder`, call-site threads) | ✅ | safe, no in-crate runtime |
+| Packed symmetry-unique ERI seam (`PackedEriBuilder`) | ✅ | `nao⁴/8` storage, each canonical quartet evaluated once; Schwarz-screened |
 | Cached direct J/K plan (`DirectContractor`) | ✅ | caller-owned worker workspaces and matrices |
 | Density-direct ERI-gradient plan (`DirectGradContractor`) | ✅ | product-form densities, no `nao⁴` tensor; caller-owned worker accumulators |
 
