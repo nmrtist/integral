@@ -8,7 +8,7 @@
 //! 2. rewrite versioned dependency snippets in the public READMEs,
 //! 3. refresh `Cargo.lock` via `cargo update --workspace`.
 //!
-//! Committing, tagging, and publishing stay manual; the next steps are printed.
+//! See `.github/RELEASING.md` for the steps after preparing a release.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,10 +25,8 @@ pub(crate) fn run(new_version: &str) -> Result<(), String> {
     bump_readme_versions(&root, &old_version, new_version)?;
     refresh_lockfile(&root);
 
-    println!("\nrelease prep for v{new_version} done (was {old_version}). Next steps:");
-    println!("  git commit -am \"chore: prep v{new_version} release\"");
-    println!("  git tag v{new_version}");
-    println!("  cargo publish -p integral");
+    println!("\nrelease prep for v{new_version} done (was {old_version}).");
+    println!("See .github/RELEASING.md for the next steps.");
     Ok(())
 }
 
